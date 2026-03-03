@@ -13,7 +13,6 @@
 - [Step 3 — Hyperparameter search](#step-3--hyperparameter-search)
 - [Step 4 — Evaluate](#step-4--evaluate)
 - [Running on your own asset](#running-on-your-own-asset)
-- [Citation](#citation)
 
 
 ## Pipeline overview
