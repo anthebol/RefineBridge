@@ -1,6 +1,20 @@
 # RefineBridge
 
-**ICASSP 2026** · 2.3M parameters · 11–71% MSE reduction across 81/90 experimental configurations · Consistently outperforms LoRA fine-tuning on S&P 500, WTI crude oil, and EURUSD.
+**ICASSP 2026** · [arxiv.org/abs/2512.21572](https://arxiv.org/abs/2512.21572)
+
+
+## Table of contents
+
+- [Pipeline overview](#pipeline-overview)
+- [Project structure](#project-structure)
+- [Environment setup](#environment-setup)
+- [Step 1 — Generate dataset](#step-1--generate-dataset)
+- [Step 2 — Train](#step-2--train)
+- [Step 3 — Hyperparameter search](#step-3--hyperparameter-search)
+- [Step 4 — Evaluate](#step-4--evaluate)
+- [Running on your own asset](#running-on-your-own-asset)
+- [Citation](#citation)
+
 
 ## Pipeline overview
 
@@ -88,7 +102,7 @@ pip install uni2ts
 pip install transformers  # TimeMoE loads via HuggingFace with trust_remote_code=True
 ```
 
-> Each of these models has its own hardware requirements, model weights, and occasionally additional dependencies. Check their respective GitHub pages before running for the first time, particularly if you are on a machine without a GPU.
+> Each model has its own hardware requirements and occasionally additional dependencies. Check their respective GitHub pages before running for the first time, particularly on machines without a GPU.
 
 Verify the core package is importable before continuing:
 
@@ -118,15 +132,15 @@ Date,Close
 
 ```bash
 python scripts/generate_dataset.py \
-    --input      data/raw/SNP500.csv \
-    --value-col  Close \
-    --date-col   Date \
-    --asset      SNP500 \
-    --pred-len   21 \
+    --input       data/raw/SNP500.csv \
+    --value-col   Close \
+    --date-col    Date \
+    --asset       SNP500 \
+    --pred-len    21 \
     --context-len 252 \
-    --tsfm       chronos \
-    --device     cuda \
-    --output-dir data/CHRONOS_bridge_dataset
+    --tsfm        chronos \
+    --device      cuda \
+    --output-dir  data/CHRONOS_bridge_dataset
 ```
 
 ### Key arguments
@@ -163,7 +177,7 @@ data/CHRONOS_bridge_dataset/SNP500/SNP500_price_21/
 Each `.npy` file contains an array of sample dicts with keys:
 `context_window`, `prediction`, `ground_truth`, `stats`, `entity_id`, `variable`, `id`
 
-The `stats` dict carries the per-sample normalisation parameters (`gt_mean`, `gt_std`, `pred_mean`, `pred_std`, `context_mean`, `context_std`) needed to denormalise predictions back to price space at evaluation time.
+The `stats` dict carries per-sample normalisation parameters (`gt_mean`, `gt_std`, `pred_mean`, `pred_std`, `context_mean`, `context_std`) needed to denormalise predictions back to price space at evaluation time.
 
 ---
 
@@ -179,7 +193,7 @@ OUTPUT_DIR      = "checkpoints/SNP500_price_21"
 CONTEXT_SEQ_LEN = 252
 PRED_SEQ_LEN    = 21      # must match --pred-len used in Step 1
 
-BETA_MIN        = 0.01    # default noise schedule works well as a starting point
+BETA_MIN        = 0.01    # default noise schedule — see table below if tuning
 BETA_MAX        = 50.0
 
 NUM_EPOCHS      = 10000
@@ -192,7 +206,7 @@ Run:
 python scripts/train.py
 ```
 
-Training saves checkpoints automatically:
+Checkpoints are saved automatically:
 
 ```
 checkpoints/SNP500_price_21/
@@ -205,22 +219,20 @@ checkpoints/SNP500_price_21/
 
 Early stopping is enabled by default. To run the full `NUM_EPOCHS` regardless, set `USE_EARLY_STOPPING = False`.
 
-### Noise schedule
-
-The paper found that two noise schedule settings work best depending on the prediction horizon:
+### Noise schedule reference
 
 | Horizon H | `BETA_MIN` | `BETA_MAX` | Why |
 |---|---|---|---|
 | 5, 10 days | `0.01` | `50.0` | Aggressive noise for rapid short-horizon refinement |
 | 21, 63, 126 days | `0.0001` | `0.02` | Gentle noise for fine long-horizon corrections |
 
-The defaults (`0.01`, `50.0`) are a safe starting point for any horizon. Tune if needed after running the hyperparam search.
+The defaults (`0.01`, `50.0`) are a safe starting point for any horizon. Tune if needed after the hyperparam search.
 
 ---
 
 ## Step 3 — Hyperparameter search
 
-Before running final evaluation, find the best `temperature` and `n_timesteps` for inference. These control how stochastic the refinement is and how many diffusion steps are taken — they have a significant effect on quality and do not require retraining.
+Before final evaluation, find the best `temperature` and `n_timesteps` for inference. These control how stochastic the refinement is and how many diffusion steps are taken — they have a significant effect on quality and do not require retraining.
 
 Open `scripts/hyperparam_search.py` and set the paths:
 
@@ -241,7 +253,7 @@ Run:
 python scripts/hyperparam_search.py
 ```
 
-This sweeps all 35 combinations (7 temperatures × 5 step counts) and saves:
+This sweeps all 35 combinations and saves:
 
 ```
 results/hyperparam_search/SNP500_price_21/
@@ -250,7 +262,7 @@ results/hyperparam_search/SNP500_price_21/
 └── mse_improvement_heatmap.csv  ← pivot table: n_timesteps × temperature
 ```
 
-At the end, the best config for each metric is printed:
+At the end, the best config per metric is printed:
 
 ```
   Best raw MSE              temp=0.01    steps=100    mse_refined=0.002187
@@ -259,7 +271,7 @@ At the end, the best config for each metric is printed:
   Best directional acc.     temp=1.0     steps=100    dir_acc=59.1%
 ```
 
-**Take the `temperature` and `n_timesteps` that give the best MSE improvement and plug them into Step 4.**
+Take the `temperature` and `n_timesteps` that give the best MSE improvement and plug them into Step 4.
 
 ---
 
@@ -286,7 +298,7 @@ python scripts/evaluate.py
 
 ### Console output
 
-Metrics are reported across three normalisation regimes to give a complete picture:
+Metrics are reported across three normalisation regimes:
 
 ```
 ============================================================
@@ -305,8 +317,6 @@ Metrics are reported across three normalisation regimes to give a complete pictu
   MAE     orig=0.412300  ref=0.279100  (-32.3% down)
 
   -- Robust (Median-MAD) metrics --
-  Robust median   4521.3
-  Robust MAD         87.4
   MSE     orig=0.003910  ref=0.002050  (-47.6% down)
   MAE     orig=0.044200  ref=0.029800  (-32.6% down)
 
@@ -345,46 +355,25 @@ The pipeline works on any univariate price series. To run on a new asset:
 3. Set `PRED_SEQ_LEN` in `scripts/train.py` to match your chosen horizon.
 4. Run Steps 2–4.
 
-A separate RefineBridge model should be trained per asset and per horizon. The paper trained and evaluated independent models for each (asset, horizon, TSFM) combination — 90 configurations in total.
+A separate RefineBridge model should be trained per asset and per horizon. The paper trained independent models for each (asset, horizon, TSFM) combination.
 
 ### Running all three TSFMs on the same asset
 
-To replicate the paper's comparison between Chronos, Moirai, and TimeMoE, run Step 1 three times with different `--tsfm` flags and different `--output-dir` folders, then train a separate model on each:
-
 ```bash
-# Generate with Chronos
+# Chronos
 python scripts/generate_dataset.py --input data/raw/SNP500.csv --value-col Close \
     --asset SNP500 --pred-len 21 --tsfm chronos \
     --output-dir data/CHRONOS_bridge_dataset
 
-# Generate with Moirai
+# Moirai
 python scripts/generate_dataset.py --input data/raw/SNP500.csv --value-col Close \
     --asset SNP500 --pred-len 21 --tsfm moirai \
     --output-dir data/MOIRAI_bridge_dataset
 
-# Generate with TimeMoE
+# TimeMoE
 python scripts/generate_dataset.py --input data/raw/SNP500.csv --value-col Close \
     --asset SNP500 --pred-len 21 --tsfm timemoe \
     --output-dir data/TIMEMOE_bridge_dataset
 ```
 
-Each model then trains on its own dataset and refines that specific TSFM's predictions.
-
----
-
-## Citation
-
-```bibtex
-@inproceedings{refinebridge2026,
-  title     = {RefineBridge: Improving Financial Time Series Foundation Model
-               Predictions via Schrödinger Bridge},
-  booktitle = {Proceedings of ICASSP},
-  year      = {2026}
-}
-```
-
----
-
-## License
-
-MIT
+Each TSFM gets its own dataset folder. Train a separate RefineBridge model on each.
